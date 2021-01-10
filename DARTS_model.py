@@ -131,11 +131,11 @@ class Discriminator(nn.Module):
         num_ops = len(PRIMITIVES)
 
         if torch.cuda.is_available:
-            self.alphas_normal = Variable(1e-3*torch.randn((k, num_ops), device = 'cuda'), requires_grad=True)
-            self.alphas_reduce = Variable(1e-3*torch.randn((k, num_ops), device = 'cuda'), requires_grad=True)
+            self.alphas_normal = Variable(torch.zeros((k, num_ops), device = 'cuda'), requires_grad=True)
+            self.alphas_reduce = Variable(torch.zeros((k, num_ops), device = 'cuda'), requires_grad=True)
         else:
-            self.alphas_normal = Variable(1e-3*torch.randn(k, num_ops), requires_grad=True)
-            self.alphas_reduce = Variable(1e-3*torch.randn(k, num_ops), requires_grad=True)
+            self.alphas_normal = Variable(torch.zeros(k, num_ops), requires_grad=True)
+            self.alphas_reduce = Variable(torch.zeros(k, num_ops), requires_grad=True)
 
         self._arch_parameters = [
           self.alphas_normal,
@@ -144,3 +144,8 @@ class Discriminator(nn.Module):
 
     def arch_parameters(self):
         return self._arch_parameters
+    
+    def load_alphas(self, alphas):
+        self.alphas_normal, self.alphas_reduce = alphas
+        if torch.cuda.is_available:
+            self.alphas_normal, self.alphas_reduce = self.alphas_normal.cuda(), self.alphas_reduce.cuda()
