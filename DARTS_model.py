@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+import numpy as np
 from operations import *
 
-
+#candidate operations
 PRIMITIVES = [
     'none',
     'max_pool_3x3',
@@ -16,7 +17,7 @@ PRIMITIVES = [
     'dil_conv_5x5'
 ]
 
-
+#mixed operation betweeen two nodes
 class MixedOp(nn.Module):
 
     def __init__(self, C, stride):
@@ -25,13 +26,13 @@ class MixedOp(nn.Module):
         for primitive in PRIMITIVES:
             op = OPS[primitive](C, stride, False)
             if 'pool' in primitive:
-                op = nn.Sequential(op, nn.BatchNorm2d(C, affine=False))
+                op = nn.Sequential(op, nn.GroupNorm(1, C, affine=False))
             self._ops.append(op)
 
     def forward(self, x, weights):
         return sum(w * op(x) for w, op in zip(weights, self._ops))
     
-    
+#DARTS cell    
 class Cell(nn.Module):
 
     def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev):
@@ -68,10 +69,10 @@ class Cell(nn.Module):
         return torch.cat(states[-self._multiplier:], dim=1)
     
     
-    
+#DARTS-based discriminator    
 class Discriminator(nn.Module):
 
-    def __init__(self, C, num_classes, layers, criterion=nn.BCEWithLogitsLoss(), steps=4, multiplier=4, stem_multiplier=3):
+    def __init__(self, C, layers, criterion=nn.BCEWithLogitsLoss(), steps=4, multiplier=4, stem_multiplier=3, num_classes = 10):
         super(Discriminator, self).__init__()
         self._C = C
         self._num_classes = num_classes
@@ -82,12 +83,8 @@ class Discriminator(nn.Module):
 
         C_curr = stem_multiplier*C
         self.stem0 = nn.Sequential(
-          nn.Conv2d(3, C_curr, 3, padding=1, bias=False),
-          nn.BatchNorm2d(C_curr)
-        )
-        self.stem1 = nn.Sequential(
-          nn.Conv2d(num_classes, C_curr, 3, padding=1, bias=False),
-          nn.BatchNorm2d(C_curr)
+          nn.Conv2d(3, C_curr//2, 3, padding=1, bias=False),
+          nn.GroupNorm(1, C_curr//2)
         )
  
         C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
@@ -105,14 +102,16 @@ class Discriminator(nn.Module):
             C_prev_prev, C_prev = C_prev, multiplier*C_curr
 
         self.global_pooling = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Linear(C_prev, 1)
+        self.emb = nn.Embedding(num_classes, 256)
+        self.fc1 = nn.Linear(512, 256)
+        self.fc2 = nn.Linear(256, 1)
 
         self._initialize_alphas()
 
 
     def forward(self, x0, x1):
-        s0 = self.stem0(x0)
-        s1 = self.stem1(x1)
+        y0 = self.stem0(x0)
+        s0 = s1 = torch.cat([y0, y0], 1)
         for i, cell in enumerate(self.cells):
             if cell.reduction:
                 weights = F.softmax(self.alphas_reduce, dim=-1)
@@ -120,7 +119,7 @@ class Discriminator(nn.Module):
                 weights = F.softmax(self.alphas_normal, dim=-1)
             s0, s1 = s1, cell(s0, s1, weights)
         out = self.global_pooling(s1)
-        logits = self.classifier(out.view(out.size(0),-1))
+        logits = self.fc2(F.relu(self.fc1(torch.cat([out.view(out.size(0),-1), self.emb(x1)], 1))))
         return logits
 
     def loss(self, x, target):
@@ -149,3 +148,30 @@ class Discriminator(nn.Module):
         self.alphas_normal, self.alphas_reduce = alphas
         if torch.cuda.is_available:
             self.alphas_normal, self.alphas_reduce = self.alphas_normal.cuda(), self.alphas_reduce.cuda()
+                
+        self._arch_parameters = [
+          self.alphas_normal,
+          self.alphas_reduce,
+        ]
+        
+    def gradient_penalty(self, real_samples, fake_samples, labels):
+        # Random weight term for interpolation between real and fake samples
+        alpha = torch.Tensor(np.random.random((real_samples.size(0), 1, 1, 1))).cuda()
+        # Get random interpolation between real and fake samples
+        interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
+        d_interpolates = self.forward(interpolates, labels).view(-1, 1)
+        fake = torch.Tensor(real_samples.shape[0], 1).fill_(1.0).cuda()
+        fake.requires_grad = False
+        # Get gradient w.r.t. interpolates
+        gradients = torch.autograd.grad(
+            outputs=d_interpolates,
+            inputs=interpolates,
+            grad_outputs=fake,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )
+        gradients = gradients[0].view(gradients[0].size(0), -1)
+        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        return gradient_penalty
+

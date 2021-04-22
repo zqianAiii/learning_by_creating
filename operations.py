@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+#DARTS operations
 OPS = {
   'none' : lambda C, stride, affine: Zero(stride),
   'avg_pool_3x3' : lambda C, stride, affine: nn.AvgPool2d(3, stride=stride, padding=1, count_include_pad=False),
@@ -22,7 +24,7 @@ class ReLUConvBN(nn.Module):
         self.net = nn.Sequential(
             nn.ReLU(),
             nn.Conv2d(in_channels, out_channels, kernel_size, stride = stride, padding = padding, bias = False),
-            nn.BatchNorm2d(out_channels, affine = affine)
+            nn.GroupNorm(1, out_channels, affine = affine)
         )
     
     def forward(self, x):
@@ -38,11 +40,11 @@ class SepConv(nn.Module):
             nn.ReLU(),
             nn.Conv2d(in_channels, in_channels, kernel_size, stride = stride, padding = padding, groups = in_channels, bias = False),
             nn.Conv2d(in_channels, in_channels, 1, bias = False),
-            nn.BatchNorm2d(in_channels, affine = affine),
+            nn.GroupNorm(1, in_channels, affine = affine),
             nn.ReLU(),
             nn.Conv2d(in_channels, in_channels, kernel_size, padding = padding, groups = in_channels, bias = False),
             nn.Conv2d(in_channels, out_channels, 1, bias = False),
-            nn.BatchNorm2d(out_channels, affine = affine)
+            nn.GroupNorm(1, out_channels, affine = affine)
         )
     
     def forward(self, x):
@@ -59,7 +61,7 @@ class DilConv(nn.Module):
             nn.Conv2d(in_channels, in_channels, kernel_size, stride = stride, padding = padding, 
                       dilation = dilation, groups = in_channels, bias = False),
             nn.Conv2d(in_channels, out_channels, 1, bias = False),
-            nn.BatchNorm2d(out_channels, affine = affine)
+            nn.GroupNorm(1, out_channels, affine = affine)
         )
         
     def forward(self, x):
@@ -86,7 +88,7 @@ class FactorizedReduce(nn.Module):
         super(FactorizedReduce, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels // 2, 1, stride = 2, bias = False)
         self.conv2 = nn.Conv2d(in_channels, out_channels // 2, 1, stride = 2, bias = False)
-        self.bn = nn.BatchNorm2d(out_channels, affine = affine)
+        self.bn = nn.GroupNorm(1, out_channels, affine = affine)
         
     def forward(self, x):
         x = F.relu(x)
